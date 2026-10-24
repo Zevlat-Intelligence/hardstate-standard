@@ -1,0 +1,391 @@
+openapi: 3.1.0
+info:
+  title: HardState API
+  version: "1"
+  summary: Public API for HardState Logs, proofs and Bitcoin anchors (HSS-1).
+  description: |
+    Reads are open and keyless. Writes need no API key: an event is accepted only if it extends its issuer's log and is
+    signed by a key that log authorizes (see HSS-1.md). Never trust this API's answers on their own: verify
+    the returned HardState Proof locally (`@hardstate/core` `verifyProof`) against Bitcoin.
+  license: { name: HardState Terms, url: "https://app.hardstate.net/terms" }
+servers:
+  - url: https://api.hardstate.net
+  - url: http://localhost:8787
+tags:
+  - name: logs
+  - name: proofs
+  - name: bitcoin
+  - name: documents
+  - name: billing
+
+paths:
+  /v1/health:
+    get: { summary: Liveness and anchoring network, responses: { "200": { description: OK } } }
+  /v1/stats:
+    get: { summary: Counts, last batch, last anchor, responses: { "200": { description: OK } } }
+  /v1/activity:
+    get:
+      summary: Latest events, across issuers or filtered by issuer and/or signer
+      parameters:
+        - { name: issuer, in: query, schema: { type: string } }
+        - { name: actor, in: query, description: Signing key id, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, maximum: 200, default: 30 } }
+      responses:
+        "200":
+          description: >-
+            { events: EventRow[] }. Each row carries where the event is on its way to Bitcoin: batch, otsStatus,
+            otsHeight, anchor, anchorStatus, anchorHeight, plus batchClosedAt (ISO 8601), otsTime and anchorTime
+            (block times, unix seconds), null until reached.
+
+  /v1/issuers:
+    get: { tags: [logs], summary: All issuers with their head and domain verification, responses: { "200": { description: OK } } }
+  /v1/issuers/{id}:
+    get:
+      tags: [logs]
+      summary: Profile, keys (as declared in the log, each with its department now), departments, head and cases
+      description: "Departments (HSS-1 §5.4): `depts: [{ id, name, parent, types, addedAt, closedAt }]` (`parent` nests one inside another, up to 4 levels); each key's `dept` reflects key.move."
+      parameters: [{ $ref: "#/components/parameters/issuer" }]
+      responses: { "200": { description: OK }, "404": { $ref: "#/components/responses/Error" } }
+  /v1/issuers/{id}/log:
+    get:
+      tags: [logs]
+      summary: The signed HardState Log, in order (for completeness audits)
+      parameters:
+        - { $ref: "#/components/parameters/issuer" }
+        - { name: from, in: query, schema: { type: integer, default: 0 } }
+        - { name: limit, in: query, schema: { type: integer, default: 1000, maximum: 5000 } }
+      responses:
+        "200":
+          description: Page of signed events; follow `next` until null.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  issuer: { type: string }
+                  head: { type: object, properties: { seq: { type: integer }, hash: { $ref: "#/components/schemas/Hash" } } }
+                  events: { type: array, items: { $ref: "#/components/schemas/SignedEvent" } }
+                  next: { type: [integer, "null"] }
+  /v1/issuers/{id}/cases/{case}:
+    get:
+      tags: [logs]
+      summary: All events of one case
+      parameters: [{ $ref: "#/components/parameters/issuer" }, { name: case, in: path, required: true, schema: { type: string } }]
+      responses: { "200": { description: OK }, "404": { $ref: "#/components/responses/Error" } }
+  /v1/issuers/{id}/signers:
+    get:
+      tags: [logs]
+      summary: Every key the log declares, with its activity
+      description: |
+        Per key: the KeyInfo fields plus addedAt / revokedAt (seq), delegatedBy, expiresAt, and count, count7d, lastAt,
+        cases (distinct cases signed) and rejected7d (see /rejections). Keys that never signed have count 0.
+      parameters: [{ $ref: "#/components/parameters/issuer" }]
+      responses: { "200": { description: "{ issuer, signers: Signer[] }" }, "404": { $ref: "#/components/responses/Error" } }
+  /v1/issuers/{id}/rejections:
+    get:
+      tags: [logs]
+      summary: Writes this API rejected that claimed one of the issuer's keys (last 30 days)
+      description: |
+        A health signal for integrations, not evidence: a rejected event proves nothing about who sent it, so `key` is
+        only the signer it claimed. Kept one by one only when that key is in the issuer's log (active, revoked or
+        expired), at most 20 per key and minute; claims by unknown keys only add to `unknownKeys7d`. No IP or event
+        body is stored. Codes: stale_head, bad_signature, revoked_key, expired, out_of_scope, not_allowed, malformed,
+        doc_mismatch, invalid.
+      parameters:
+        - { $ref: "#/components/parameters/issuer" }
+        - { name: key, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, maximum: 500, default: 50 } }
+      responses:
+        "200": { description: "{ issuer, rejections: [{ at, key, type, code, message }], last7d: { <key>: { total, byCode } }, unknownKeys7d }" }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/issuers/{id}/batches:
+    get:
+      tags: [logs]
+      summary: The batches holding the issuer's events, one row per batch
+      description: |
+        A batch closes over everything queued, so it holds a contiguous run of each issuer's seqs: `from`–`to` places
+        every event in it without listing them. `otsTime` and `anchorTime` are block times (unix seconds), null until
+        the block is reached. Events received since `since` (default: 31 days ago).
+      parameters:
+        - { $ref: "#/components/parameters/issuer" }
+        - { name: since, in: query, description: ISO 8601, schema: { type: string } }
+      responses:
+        "200": { description: "{ issuer, since, batches: [{ id, closedAt, from, to, n, otsStatus, otsHeight, otsTime, anchor, anchorStatus, anchorHeight, anchorTime }] }" }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/issuers/{id}/flow:
+    get:
+      tags: [logs]
+      summary: Recent steps and batches as compact columns (the console overview's chart)
+      description: |
+        Steps from `seq0` on, contiguous: `t` (seconds from `base`), `s` (index into `signers`), `y` (index into
+        `types`). `batches` are `[closed, from, to, n, blockHeight, blockTime, stage]` (unix seconds; stage 1 batched,
+        2 on Bitcoin through OpenTimestamps, 3 anchored), the block being the first one the batch reached. With `after`,
+        only steps past that seq; `bsince` limits batches to those whose events arrived since then.
+      parameters:
+        - { $ref: "#/components/parameters/issuer" }
+        - { name: since, in: query, description: "ISO 8601 (default: 31 days ago)", schema: { type: string } }
+        - { name: after, in: query, description: Only steps with a higher seq, schema: { type: integer } }
+        - { name: bsince, in: query, description: "ISO 8601 (default: since)", schema: { type: string } }
+      responses:
+        "200": { description: "{ issuer, head, since, seq0, base, t, s, y, signers, types, batches }" }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/issuers/{id}/verify-domain:
+    post:
+      tags: [logs]
+      summary: Link a domain (HSS-1 §5.3)
+      description: |
+        The domain must be the `website` the issuer's signed profile declares, and must name the log either at
+        https://<domain>/.well-known/hardstate.json ({ issuer, genesis }) or in a TXT record
+        `_hardstate.<domain>` = "issuer=<id> genesis=<hash>". Otherwise 422, with what to publish.
+        Rate-limited per address (429).
+      parameters: [{ $ref: "#/components/parameters/issuer" }]
+      requestBody: { content: { application/json: { schema: { type: object, required: [domain], properties: { domain: { type: string } } } } } }
+      responses: { "200": { description: "{ verified: domain, via: well-known | dns }" }, "422": { $ref: "#/components/responses/Error" }, "429": { $ref: "#/components/responses/Error" } }
+
+  /v1/events/prepare:
+    post:
+      tags: [logs]
+      summary: Prepare the next event on the live head, for integration in any language
+      description: |
+        Returns the exact event (with seq, prev and ts filled in), its RFC 8785 canonical form and the 32-byte hash to
+        sign with Ed25519. Nothing is stored. Compare `event` with what you sent, sign `hash`, then POST /v1/events.
+        See docs/integration/README.md.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [issuer, type, actor]
+              properties:
+                issuer: { type: string }
+                type: { type: string }
+                case: { type: string }
+                public: { type: object }
+                docs: { type: array, items: { type: object } }
+                actor: { type: string }
+                ts: { type: string, format: date-time }
+      responses:
+        "200":
+          description: Prepared event
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  event: { $ref: "#/components/schemas/Event" }
+                  canonical: { type: string }
+                  hash: { $ref: "#/components/schemas/Hash" }
+                  challenge: { type: string, description: base64url of hash (the WebAuthn challenge for passkeys) }
+        "404": { description: Unknown issuer (and type is not issuer.create) }
+        "422": { description: Malformed event }
+  /v1/events:
+    post:
+      tags: [logs]
+      summary: Append a signed event to its issuer's log
+      description: |
+        `seq` must be head+1 and `prev` the head hash. On 409 the head moved: rebuild on the returned head and sign again
+        (`HardStateClient.append` does this). `publish` lists documents whose salt and digest are revealed (then PUT the
+        file to /v1/docs/{commitment}).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - { $ref: "#/components/schemas/SignedEvent" }
+                - type: object
+                  properties:
+                    publish:
+                      type: array
+                      items: { type: object, required: [commitment, digest, salt], properties: { commitment: { $ref: "#/components/schemas/Hash" }, digest: { $ref: "#/components/schemas/Hash" }, salt: { $ref: "#/components/schemas/Hash" } } }
+      responses:
+        "201": { description: "{ hash, issuer, seq, status: queued, proof, receipt }" }
+        "402": { description: "The plan's monthly fair-use limit is spent (10% grace); issuer.*, key.* and session.* events still go through: { error, plan, limit, records, upgrade }" }
+        "404": { description: Issuer does not exist and the event is not issuer.create }
+        "409": { description: "The log head moved: { error, head }" }
+        "422": { description: Shape, chain, authorization or signature check failed }
+        "429": { description: Rate limited }
+  /v1/events/{hash}:
+    get:
+      tags: [logs]
+      summary: One signed event, its pipeline status and published documents
+      parameters: [{ $ref: "#/components/parameters/hash" }]
+      responses: { "200": { description: OK }, "404": { $ref: "#/components/responses/Error" } }
+
+  /v1/proofs/{hash}:
+    get:
+      tags: [proofs]
+      summary: HardState Proof for an event or a stamp
+      parameters: [{ $ref: "#/components/parameters/hash" }]
+      responses:
+        "200":
+          description: "{ proof: HardStateProof, status: queued|batched|timestamped|anchored, batch?, anchor?, receipt? }"
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/stamp:
+    post:
+      tags: [proofs]
+      summary: Anchor a bare SHA-256 digest (no account)
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [digest], properties: { digest: { $ref: "#/components/schemas/Hash" } } } } } }
+      responses: { "201": { description: "{ hash, status, proof, verify }" }, "429": { description: Rate limited } }
+
+  /v1/batches:
+    get: { tags: [bitcoin], summary: Recent batches with OpenTimestamps status, responses: { "200": { description: OK } } }
+  /v1/batches/{id}:
+    get: { tags: [bitcoin], summary: One batch with its ordered leaf list, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: OK } } }
+  /v1/batches/{id}/ots:
+    get:
+      tags: [bitcoin]
+      summary: Detached .ots for the batch root (verify with `ots verify -d <root> <file>`)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "200": { description: OpenTimestamps proof, content: { application/vnd.opentimestamps.v1: {} } } }
+  /v1/anchors:
+    get: { tags: [bitcoin], summary: HardState Anchor transactions with fees, responses: { "200": { description: OK } } }
+  /v1/anchors/{id}:
+    get: { tags: [bitcoin], summary: One anchor and its batches, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: OK } } }
+  /v1/wallet:
+    get: { tags: [bitcoin], summary: Anchoring address, balance and current cost per anchor, responses: { "200": { description: OK } } }
+  /v1/topups:
+    get:
+      tags: [bitcoin]
+      summary: The treasury's automatic top-ups of the anchoring wallet (fiat bought into sats on an exchange, withdrawn on-chain)
+      parameters: [{ name: limit, in: query, schema: { type: integer, maximum: 100 } }]
+      responses: { "200": { description: "{ topups[]: id, exchange, status, fiat, fiat_amount, sats, txid, address, runway_days }" } }
+  /v1/anchors/express:
+    post:
+      tags: [bitcoin, billing]
+      summary: Anchor now at the next-block fee, from the plan's monthly allowance (operator request anchor.express)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SignedOperatorRequest" } } } }
+      responses:
+        "201": { description: Broadcast (txid, feeSats, remaining) }
+        "200": { description: "An express anchor sent in the last 15 minutes already covers the issuer's records ({ shared, txid, remaining })" }
+        "202": { description: "Fees are above PLAN_EXPRESS_MAX_FEE_RATE: deferred to the next hourly or daily anchor, not counted ({ deferred, remaining })" }
+        "402": { description: Not in the plan, or this month's allowance is used }
+        "403": { description: Not signed by a live admin key of the issuer }
+
+  /v1/plans:
+    get: { tags: [billing], summary: "Plans institutions can buy (citizens never pay): limits, prices per interval and currency, features", responses: { "200": { description: "{ plans[], billing, testMode }" } } }
+  /v1/issuers/{id}/account:
+    get:
+      tags: [billing]
+      summary: "The issuer's plan, this month's usage (records, express anchors, open departments) and limits (departments: null = unlimited)"
+      parameters: [{ $ref: "#/components/parameters/issuer" }]
+      responses: { "200": { description: OK }, "404": { $ref: "#/components/responses/Error" } }
+  /v1/billing/checkout:
+    post:
+      tags: [billing]
+      summary: "Stripe Checkout URL for a self-serve plan (operator request billing.checkout; params: plan, interval)"
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SignedOperatorRequest" } } } }
+      responses: { "200": { description: "{ url }" }, "403": { description: Not a live admin key }, "409": { description: Nonce reused, or already subscribed }, "503": { description: Billing not configured on this node } }
+  /v1/billing/invoice:
+    post:
+      tags: [billing]
+      summary: "A subscription billed by invoice, net 30, payable by bank transfer (billing.invoice; params: plan, interval, email, name, address, taxId?, po?)"
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SignedOperatorRequest" } } } }
+      responses: { "201": { description: "{ invoice, url, pdf, dueInDays, email }" } }
+  /v1/billing/portal:
+    post:
+      tags: [billing]
+      summary: Stripe Customer Portal URL (billing.portal)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SignedOperatorRequest" } } } }
+      responses: { "200": { description: "{ url }" }, "404": { description: No billing account yet } }
+  /v1/billing/webhook:
+    post: { tags: [billing], summary: Stripe events, authenticated by the Stripe-Signature header, responses: { "200": { description: Applied, or a duplicate }, "400": { description: Bad signature } } }
+
+  /v1/keys/{id}:
+    get: { tags: [logs], summary: A signing key and its issuer, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { description: OK }, "404": { $ref: "#/components/responses/Error" } } }
+
+  /v1/docs/{commitment}:
+    put:
+      tags: [documents]
+      summary: Upload a published document (its SHA-256 must match the published digest)
+      parameters: [{ $ref: "#/components/parameters/commitment" }]
+      requestBody: { required: true, content: { application/octet-stream: {} } }
+      responses: { "200": { description: Stored }, "413": { description: Over 25 MB }, "422": { description: Digest mismatch } }
+    get:
+      tags: [documents]
+      summary: Download a published document (salt and digest in X-HardState-Salt / X-HardState-Digest)
+      parameters: [{ $ref: "#/components/parameters/commitment" }]
+      responses: { "200": { description: The file }, "404": { $ref: "#/components/responses/Error" } }
+  /v1/lookup/{digest}:
+    get:
+      tags: [documents]
+      summary: Published documents (and stamps) with this plain SHA-256
+      parameters: [{ name: digest, in: path, required: true, schema: { $ref: "#/components/schemas/Hash" } }]
+      responses: { "200": { description: "{ digest, documents[], stamped }" } }
+
+components:
+  parameters:
+    issuer: { name: id, in: path, required: true, schema: { type: string, pattern: "^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$" } }
+    hash: { name: hash, in: path, required: true, schema: { $ref: "#/components/schemas/Hash" } }
+    commitment: { name: commitment, in: path, required: true, schema: { $ref: "#/components/schemas/Hash" } }
+  responses:
+    Error:
+      description: Error
+      content: { application/json: { schema: { type: object, properties: { error: { type: string } } } } }
+  schemas:
+    Hash: { type: string, pattern: "^[0-9a-f]{64}$" }
+    KeyInfo:
+      type: object
+      required: [id, kind, alg, publicKey, role, label]
+      properties:
+        id: { type: string }
+        kind: { enum: [passkey, ed25519] }
+        alg: { enum: [-7, -257, -8] }
+        publicKey: { type: string, description: SPKI DER, base64url }
+        role: { enum: [admin, official, system, session] }
+        label: { type: string }
+        rpId: { type: string }
+        scope:
+          type: object
+          properties:
+            types: { type: array, items: { type: string }, description: 'exact types or "domain.*"' }
+            expires: { type: string, format: date-time }
+    Event:
+      type: object
+      additionalProperties: false
+      required: [hss, issuer, seq, prev, type, ts, public, docs, actor]
+      properties:
+        hss: { const: 1 }
+        issuer: { type: string }
+        seq: { type: integer, minimum: 0 }
+        prev: { oneOf: [{ $ref: "#/components/schemas/Hash" }, { type: "null" }] }
+        type: { type: string }
+        case: { type: string, maxLength: 128 }
+        ts: { type: string, format: date-time }
+        public: { type: object }
+        docs:
+          type: array
+          items: { type: object, required: [label, commitment], properties: { label: { type: string }, commitment: { $ref: "#/components/schemas/Hash" }, mime: { type: string }, size: { type: integer } } }
+        actor: { type: string }
+    Signature:
+      oneOf:
+        - type: object
+          required: [kind, authenticatorData, clientDataJSON, signature]
+          properties: { kind: { const: passkey }, authenticatorData: { type: string }, clientDataJSON: { type: string }, signature: { type: string } }
+        - type: object
+          required: [kind, signature]
+          properties: { kind: { const: ed25519 }, signature: { type: string } }
+    SignedOperatorRequest:
+      type: object
+      description: |
+        Not part of HSS-1: an admin's instruction to the operator. The signed hash is
+        sha256("hardstate/operator/v1" ‖ JCS(request)); accepted within 5 minutes of ts, once per nonce, from a live
+        admin key of the issuer.
+      required: [request, sig]
+      properties:
+        request:
+          type: object
+          required: [op, issuer, key, ts, nonce]
+          properties:
+            op: { enum: [billing.checkout, billing.invoice, billing.portal, anchor.express] }
+            issuer: { type: string }
+            key: { type: string, description: The signing admin key id }
+            ts: { type: string, format: date-time }
+            nonce: { type: string, description: 16 random bytes, base64url }
+            params: { type: object }
+        sig: { $ref: "#/components/schemas/Signature" }
+    SignedEvent:
+      type: object
+      required: [event, sig]
+      properties: { event: { $ref: "#/components/schemas/Event" }, sig: { $ref: "#/components/schemas/Signature" } }

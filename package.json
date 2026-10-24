@@ -1,0 +1,17 @@
+{
+  "name": "hardstate-standard",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "core"
+  ],
+  "scripts": {
+    "test": "npm test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "typescript": "^5.9.3"
+  }
+}

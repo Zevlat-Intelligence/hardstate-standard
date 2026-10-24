@@ -1,0 +1,23 @@
+{
+  "name": "@hardstate/core",
+  "version": "0.1.0",
+  "description": "HardState Standard (HSS-1): events, logs, Merkle batches, OpenTimestamps, Bitcoin anchors, proofs and verifier.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Zevlat-Intelligence/hardstate-standard.git",
+    "directory": "core"
+  },
+  "homepage": "https://hardstate.net",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@noble/hashes": "^2.4.0"
+  }
+}
