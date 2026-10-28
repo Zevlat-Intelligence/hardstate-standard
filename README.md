@@ -24,12 +24,7 @@ integration/         How an institution's software records each step and hands t
 
 ## How a record is checked
 
-```
- official signs a step          institution's HardState Log        every 10 min            Bitcoin
- (passkey or system key)   ──▶  seq 41 ─▶ seq 42 ─▶ seq 43   ──▶  Merkle batch root  ──▶  OpenTimestamps
-                                 (each links to the previous)                        └─▶  OP_RETURN "HSS"‖root
- verify anywhere: hash → signature → issuer's log → batch → Bitcoin block header (2+ explorers)
-```
+![How HardState works: sign, chain, batch, anchor to Bitcoin, verify in the browser](architecture.svg)
 
 The verifier never asks a HardState server whether a record is valid. It recomputes every hash, checks every signature
 against the keys the institution's own log authorizes, and reads Bitcoin from at least two independent explorers.

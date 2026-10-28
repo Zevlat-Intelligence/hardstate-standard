@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 920" width="1600" height="920" role="img" aria-labelledby="t d">
+  <title id="t">How HardState works</title>
+  <desc id="d">Officials and systems sign each step; each institution keeps a chained log; every few minutes new entries fold into one Merkle root, timestamped on Bitcoin through OpenTimestamps and a daily HardState Anchor; anyone verifies a receipt in the browser against public Bitcoin explorers.</desc>
+  <defs>
+    <style>
+      .h { font: 600 30px Sora, Manrope, system-ui, sans-serif; fill: #eef2ea; }
+      .sub { font: 400 17px Manrope, system-ui, sans-serif; fill: #a9b2a4; }
+      .step { font: 700 13px "JetBrains Mono", ui-monospace, monospace; fill: #c4f53a; letter-spacing: .12em; }
+      .stepS { font: 700 13px "JetBrains Mono", ui-monospace, monospace; fill: #f7931a; letter-spacing: .12em; }
+      .t { font: 600 18px Manrope, system-ui, sans-serif; fill: #eef2ea; }
+      .b { font: 400 14.5px Manrope, system-ui, sans-serif; fill: #a9b2a4; }
+      .m { font: 500 13px "JetBrains Mono", ui-monospace, monospace; fill: #848d80; }
+      .mi { font: 500 13px "JetBrains Mono", ui-monospace, monospace; fill: #eef2ea; }
+      .ok { font: 600 14px Manrope, system-ui, sans-serif; fill: #eef2ea; }
+      .card { fill: #131613; stroke: #ffffff24; stroke-width: 1.2; }
+      .arrow { stroke: #c4f53a; stroke-width: 2; fill: none; }
+      .seal { stroke: #f7931a; stroke-width: 2; fill: none; }
+      .dash { stroke: #848d80; stroke-width: 1.5; fill: none; stroke-dasharray: 4 5; }
+    </style>
+    <marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#c4f53a"/></marker>
+    <marker id="s" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#f7931a"/></marker>
+    <marker id="g" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#848d80"/></marker>
+  </defs>
+
+  <rect width="1600" height="920" rx="28" fill="#0b0d0b"/>
+  <text x="60" y="78" class="h">How HardState works</text>
+  <text x="60" y="110" class="sub">Every step an institution takes is signed, chained and anchored to Bitcoin. Anyone verifies it, without asking anyone.</text>
+
+  <!-- 1 · SIGN -->
+  <text x="60" y="176" class="step">1 · SIGN</text>
+  <rect x="60" y="194" width="300" height="118" rx="16" class="card"/>
+  <circle cx="98" cy="236" r="18" fill="#c4f53a1f" stroke="#c4f53a" stroke-width="1.5"/>
+  <path d="M91 238a7 7 0 1 1 14 0M98 231v-3M92 246h12" stroke="#c4f53a" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+  <text x="128" y="232" class="t">Officials</text>
+  <text x="128" y="254" class="b">a passkey on their phone</text>
+  <text x="128" y="274" class="b">or laptop: Face ID, fingerprint</text>
+  <text x="128" y="294" class="b">or PIN. One approval per shift.</text>
+  <rect x="60" y="326" width="300" height="104" rx="16" class="card"/>
+  <rect x="82" y="352" width="32" height="24" rx="5" fill="none" stroke="#a9b2a4" stroke-width="1.6"/>
+  <path d="M90 384h16" stroke="#a9b2a4" stroke-width="1.6"/>
+  <text x="128" y="364" class="t">Systems</text>
+  <text x="128" y="386" class="b">the software it already runs,</text>
+  <text x="128" y="406" class="b">with its own scoped key.</text>
+  <text x="60" y="460" class="m">no wallet · no token</text>
+
+  <path d="M372 300H422" class="arrow" marker-end="url(#a)"/>
+
+  <!-- 2 · CHAIN -->
+  <text x="436" y="176" class="step">2 · CHAIN</text>
+  <rect x="436" y="194" width="330" height="236" rx="16" class="card"/>
+  <text x="460" y="226" class="t">The institution's own log</text>
+  <g>
+    <rect x="460" y="246" width="282" height="40" rx="10" fill="#0b0d0b" stroke="#ffffff24"/>
+    <text x="476" y="271" class="mi">#41</text><text x="520" y="271" class="m">case.open · Permits portal</text>
+    <rect x="460" y="306" width="282" height="40" rx="10" fill="#0b0d0b" stroke="#ffffff24"/>
+    <text x="476" y="331" class="mi">#42</text><text x="520" y="331" class="m">case.review · BPTR88</text>
+    <rect x="460" y="366" width="282" height="40" rx="10" fill="#0b0d0b" stroke="#c4f53a"/>
+    <text x="476" y="391" class="mi">#43</text><text x="520" y="391" class="m">case.inspect · ZR3HKW</text>
+    <path d="M488 304v-14" stroke="#c4f53a" stroke-width="1.6" marker-end="url(#a)"/><path d="M488 364v-14" stroke="#c4f53a" stroke-width="1.6" marker-end="url(#a)"/>
+  </g>
+  <text x="436" y="460" class="m">each entry links to the one before</text>
+  <text x="436" y="480" class="m">who may sign is declared in the log itself</text>
+
+  <path d="M778 300H828" class="arrow" marker-end="url(#a)"/>
+
+  <!-- 3 · BATCH -->
+  <text x="842" y="176" class="step">3 · BATCH</text>
+  <rect x="842" y="194" width="310" height="236" rx="16" class="card"/>
+  <text x="866" y="226" class="t">Folded into one fingerprint</text>
+  <g stroke="#c4f53a" stroke-width="1.6" fill="none">
+    <path d="M997 256L937 300M997 256L1057 300M937 300L907 344M937 300L967 344M1057 300L1027 344M1057 300L1087 344"/>
+  </g>
+  <circle cx="997" cy="252" r="11" fill="#c4f53a"/>
+  <g fill="#0b0d0b" stroke="#c4f53a" stroke-width="1.6">
+    <circle cx="937" cy="300" r="8"/><circle cx="1057" cy="300" r="8"/>
+    <rect x="899" y="340" width="16" height="16" rx="3"/><rect x="959" y="340" width="16" height="16" rx="3"/>
+    <rect x="1019" y="340" width="16" height="16" rx="3"/><rect x="1079" y="340" width="16" height="16" rx="3"/>
+  </g>
+  <text x="866" y="390" class="b">Every few minutes, the new entries</text>
+  <text x="866" y="410" class="b">become one Merkle root.</text>
+
+  <path d="M1164 300H1214" class="seal" marker-end="url(#s)"/>
+
+  <!-- 4 · ANCHOR -->
+  <text x="1228" y="176" class="stepS">4 · ANCHOR</text>
+  <rect x="1228" y="194" width="312" height="236" rx="16" class="card" stroke="#f7931a66"/>
+  <text x="1252" y="226" class="t">Bitcoin</text>
+  <g fill="#f7931a1f" stroke="#f7931a" stroke-width="1.6">
+    <rect x="1252" y="246" width="44" height="44" rx="8"/><rect x="1312" y="246" width="44" height="44" rx="8"/><rect x="1372" y="246" width="44" height="44" rx="8" fill="#f7931a"/>
+  </g>
+  <path d="M1296 268h16M1356 268h16" stroke="#f7931a" stroke-width="1.6"/>
+  <text x="1252" y="322" class="b">OpenTimestamps for every batch,</text>
+  <text x="1252" y="342" class="b">and the institution's own anchor:</text>
+  <text x="1252" y="364" class="mi">OP_RETURN "HSS" ‖ root</text>
+  <text x="1252" y="400" class="b">Neutral: no government or</text>
+  <text x="1252" y="420" class="b">company controls it.</text>
+  <text x="1228" y="460" class="m">only fingerprints go on-chain</text>
+
+  <!-- the proof comes back down -->
+  <path d="M1384 492V560" class="dash" marker-end="url(#g)"/>
+  <text x="1396" y="532" class="m">proof</text>
+
+  <!-- 5 · VERIFY -->
+  <text x="60" y="560" class="step">5 · VERIFY</text>
+  <rect x="60" y="578" width="1480" height="232" rx="18" class="card"/>
+  <g transform="translate(92 614)">
+    <rect width="96" height="96" rx="12" fill="#eef2ea"/>
+    <g fill="#0b0d0b">
+      <rect x="10" y="10" width="26" height="26" rx="3"/><rect x="60" y="10" width="26" height="26" rx="3"/><rect x="10" y="60" width="26" height="26" rx="3"/>
+      <rect x="44" y="44" width="8" height="8"/><rect x="60" y="48" width="8" height="8"/><rect x="72" y="60" width="8" height="8"/><rect x="48" y="72" width="8" height="8"/><rect x="78" y="78" width="8" height="8"/><rect x="44" y="20" width="8" height="8"/>
+    </g>
+    <g fill="#eef2ea"><rect x="16" y="16" width="14" height="14"/><rect x="66" y="16" width="14" height="14"/><rect x="16" y="66" width="14" height="14"/></g>
+  </g>
+  <text x="212" y="640" class="t">A receipt for every person</text>
+  <text x="212" y="664" class="b">in the notice they already get.</text>
+  <text x="212" y="684" class="b">Citizens, auditors, journalists:</text>
+  <text x="212" y="704" class="b">anyone can check it.</text>
+
+  <path d="M470 662H520" class="arrow" marker-end="url(#a)"/>
+
+  <text x="540" y="626" class="m">IN THE BROWSER, STEP BY STEP</text>
+  <g>
+    <rect x="540" y="640" width="208" height="40" rx="20" fill="#a6e34a1c" stroke="#a6e34a66"/><text x="562" y="665" class="ok">✓ Record intact</text>
+    <rect x="760" y="640" width="290" height="40" rx="20" fill="#a6e34a1c" stroke="#a6e34a66"/><text x="782" y="665" class="ok">✓ Signed by an authorized key</text>
+    <rect x="1062" y="640" width="250" height="40" rx="20" fill="#a6e34a1c" stroke="#a6e34a66"/><text x="1084" y="665" class="ok">✓ Log complete, no gaps</text>
+    <rect x="540" y="692" width="190" height="40" rx="20" fill="#a6e34a1c" stroke="#a6e34a66"/><text x="562" y="717" class="ok">✓ In its batch</text>
+    <rect x="742" y="692" width="240" height="40" rx="20" fill="#f7931a1f" stroke="#f7931a88"/><text x="764" y="717" class="ok">✓ In a Bitcoin block</text>
+    <rect x="994" y="692" width="318" height="40" rx="20" fill="#a6e34a1c" stroke="#a6e34a66"/><text x="1016" y="717" class="ok">✓ The document matches</text>
+  </g>
+  <text x="540" y="772" class="b">It reads Bitcoin from two or more public explorers. No HardState server is asked whether a record is valid,</text>
+  <text x="540" y="792" class="b">and proofs keep verifying even if HardState is gone.</text>
+
+  <text x="60" y="866" class="m">Nothing personal goes on-chain: documents stay with their owners, and the log keeps only a salted fingerprint of each.</text>
+  <text x="1540" y="866" class="m" text-anchor="end">HSS-1 · open standard</text>
+</svg>
