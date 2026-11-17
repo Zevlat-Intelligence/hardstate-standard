@@ -11,9 +11,10 @@ import { blockAt, consensus, EXPLORERS, anchorScript, txInfo, type Network } fro
 import { docCommitment, eventHash, type HssEvent, type KeyInfo, type Signature, type SignedEvent } from "./event.ts";
 import { attestations, deserializeDetached, merkleRootMatches } from "./ots.ts";
 import { leafOf, proofRoot, type HardStateProof } from "./proof.ts";
+import { verifyCheckpointInclusion } from "./layered.ts";
 import { userVerified, verifyEventSignature } from "./sig.ts";
 
-export type StepId = "integrity" | "signature" | "batch" | "ots" | "anchor" | "document" | "log" | "absence" | "completeness" | "revocation";
+export type StepId = "integrity" | "signature" | "batch" | "ots" | "anchor" | "document" | "log" | "absence" | "completeness" | "revocation" | "checkpoint";
 export type StepState = "pass" | "fail" | "pending" | "skip";
 
 export interface Step {
@@ -44,6 +45,10 @@ export interface VerifyOptions {
   authority?: AuthorityCheck;
   /** Replays a full log. Without it, `log` is not checked. */
   replay?: LogReplay;
+  /** The operator's key (/v1/operator): checks its signature on a layered receipt's checkpoint. */
+  operatorKey?: KeyInfo;
+  /** Witnesses a layered receipt's checkpoint needs to count as witnessed (default 1). */
+  witnessK?: number;
 }
 
 /** What the verdict says about who signed. */
@@ -124,7 +129,21 @@ export async function verifyReceipt(proof: HardStateProof, opts: VerifyOptions =
 
   // 3. Inclusion in the batch.
   let batchRoot: Bytes | undefined;
-  if (!proof.batch) {
+  if (proof.checkpoint && proof.subject.kind === "event") {
+    // The layered log: the record is in a checkpoint of its institution's log, and the checkpoint is a batch leaf.
+    const ci = proof.checkpoint;
+    try {
+      const r = await verifyCheckpointInclusion(subject, proof.subject.signed.event.issuer, ci, { operatorKey: opts.operatorKey, k: opts.witnessK });
+      batchRoot = r.batchRoot;
+      const c = ci.signed.checkpoint;
+      const by = r.witnesses.length ? ` witnessed by ${r.witnesses.length} other ${r.witnesses.length === 1 ? "institution" : "institutions"} (${r.witnesses.join(", ")}),` : "";
+      add({ id: "batch", state: "pass", title: "Included in batch",
+        detail: `The record is in checkpoint #${c.size - 1} of the institution's log,${by} which is in batch ${ci.batch.id}.`,
+        facts: { batch: ci.batch.id, root: ci.batch.root, checkpoint: c.size, checkpointRoot: c.root, witnesses: r.witnesses.join(","), witnessCount: r.witnesses.length, operatorChecked: r.operatorChecked } });
+    } catch (e) {
+      add({ id: "batch", state: "fail", title: "Batch inclusion", detail: msg(e) });
+    }
+  } else if (!proof.batch) {
     add({ id: "batch", state: "pending", title: "Waiting for the next batch", detail: "Records are grouped every 10 minutes before being timestamped on Bitcoin." });
   } else {
     try {

@@ -7,6 +7,8 @@ import {
   anchorScript, canonicalize, commitFile, deserializeDetached, deserializeTimestamp, docCommitment, hex,
   inclusionPath, leafHash, otsStatus, parseAnchorScript, rootFromPath, rootFromSides, rootOf, serializeDetached, sidedPath,
   eventHash, serializeTimestamp, sha256, streamDigest, utf8, verifyAbsence, verifyInclusion, verifyReceipt, verifyStream,
+  MemoryMmr, checkpointHash, logLeaf, mmrAppend, mmrConsistency, mmrInclusion, mmrRoot, verifyCheckpoint, verifyCheckpoints,
+  verifyConsistency, verifyInCheckpoint, verifyMmrInclusion, type Bytes, type Checkpoint,
 } from "../src/index.ts";
 import { buildAbsence, buildProof, confirmedTimestamp, demoLog, ed25519Key } from "./helpers.ts";
 
@@ -242,4 +244,64 @@ test("stream: a late heartbeat is a gap; a slice that skips an entry or a beat t
   assert.equal((await verifyStream(first, second, swapped)).state, "unlinked");
   const elsewhere = await stream((x) => ({ ...x, since: 2 }));
   assert.equal((await verifyStream(elsewhere.first, elsewhere.second, elsewhere.segment)).state, "unlinked");
+});
+
+// ── The log as a Merkle Mountain Range, and checkpoints ───────────────────────────────────────────────────────────
+
+const entry = (i: number) => sha256(utf8(`entry ${i}`));
+
+async function forest(n: number) {
+  const s = new MemoryMmr();
+  const hashes: Bytes[] = [];
+  for (let i = 0; i < n; i++) { const h = await entry(i); hashes.push(h); await mmrAppend(s, i, await logLeaf(h)); }
+  return { s, hashes };
+}
+
+test("MMR: the root equals the RFC 9162 root of the same leaves at every size, and every entry proves its place", async () => {
+  const { s, hashes } = await forest(64);
+  const leaves = await Promise.all(hashes.map((h) => logLeaf(h)));
+  for (let n = 0; n <= 64; n++) {
+    const root = await mmrRoot(s, n);
+    assert.deepEqual(root, await rootOf(leaves.slice(0, n)), `n=${n}`);
+    for (let i = 0; i < n; i++) {
+      const path = await mmrInclusion(s, n, i);
+      assert.ok(await verifyMmrInclusion(hashes[i], path, root), `n=${n} i=${i}`);
+      if (n > 1) assert.ok(!(await verifyMmrInclusion(hashes[(i + 1) % n], path, root)), `wrong entry n=${n} i=${i}`);
+    }
+  }
+});
+
+test("MMR: consistency proofs hold for every pair of sizes, and fail for a rewritten past", async () => {
+  const { s } = await forest(33);
+  const roots = await Promise.all(Array.from({ length: 34 }, (_, n) => mmrRoot(s, n)));
+  for (let m = 0; m <= 33; m++) for (let n = m; n <= 33; n++) {
+    const p = await mmrConsistency(s, m, n);
+    assert.ok(await verifyConsistency(p, roots[m], roots[n]), `m=${m} n=${n}`);
+    if (m > 0 && n > m) assert.ok(!(await verifyConsistency(p, roots[m - 1], roots[n])), `wrong old root m=${m} n=${n}`);
+  }
+  // A log whose entry #3 was rewritten is not an extension of the original.
+  const forged = new MemoryMmr();
+  for (let i = 0; i < 20; i++) await mmrAppend(forged, i, await logLeaf(i === 3 ? await sha256(utf8("rewritten")) : await entry(i)));
+  const p = await mmrConsistency(forged, 10, 20);
+  assert.ok(!(await verifyConsistency(p, roots[10], await mmrRoot(forged, 20))));
+  const tampered = await mmrConsistency(s, 7, 30);
+  tampered.blocks[0] = "00".repeat(32);
+  assert.ok(!(await verifyConsistency(tampered, roots[7], roots[30])));
+});
+
+test("checkpoints: the operator's signature, the head under the root, and one checkpoint extending another", async () => {
+  const { s, hashes } = await forest(21);
+  const op = await ed25519Key("system", "Operator");
+  const at = async (n: number): Promise<Checkpoint> => ({ hardstate: "checkpoint", v: 1, issuer: "demo-city", size: n, root: hex.encode(await mmrRoot(s, n)),
+    head: { seq: n - 1, hash: hex.encode(hashes[n - 1]) }, ts: "2026-11-17T12:00:00.000Z", signer: op.info.id });
+  const a = await at(9), b = await at(21);
+  const signed = { checkpoint: b, sigs: [{ key: op.info.id, sig: await op.signHash(await checkpointHash(b)) }] };
+  const hexPath = (await mmrInclusion(s, 21, 20)).map((x) => ({ s: x.s, h: hex.encode(x.h) }));
+  assert.equal(await verifyCheckpoint(signed, op.info, hexPath), hex.encode(await checkpointHash(b)));
+  await assert.rejects(verifyCheckpoint({ ...signed, checkpoint: { ...b, root: a.root } }, op.info), /signature/i);
+  assert.ok(await verifyCheckpoints(a, b, await mmrConsistency(s, 9, 21)));
+  assert.ok(!(await verifyCheckpoints(b, a, await mmrConsistency(s, 9, 21))));
+  const p5 = (await mmrInclusion(s, 21, 5)).map((x) => ({ s: x.s, h: hex.encode(x.h) }));
+  assert.ok(await verifyInCheckpoint(b, hex.encode(hashes[5]), p5));
+  assert.ok(!(await verifyInCheckpoint(b, hex.encode(hashes[6]), p5)));
 });

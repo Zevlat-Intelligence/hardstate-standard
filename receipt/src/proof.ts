@@ -5,9 +5,10 @@
 import { concat, hex, type Bytes } from "./bytes.ts";
 import type { Network } from "./btc.ts";
 import type { SignedEvent } from "./event.ts";
+import type { CheckpointInclusion } from "./layered.ts";
 import { leafHash, rootFromPath, rootFromSides } from "./merkle.ts";
 
-export const LEAF_KIND = { event: 0x01, stamp: 0x02, batch: 0x03, index: 0x04, gap: 0x05 } as const;
+export const LEAF_KIND = { event: 0x01, stamp: 0x02, batch: 0x03, index: 0x04, gap: 0x05, log: 0x06, checkpoint: 0x07 } as const;
 export type LeafKind = keyof typeof LEAF_KIND;
 
 /** The leaf hash of a 32-byte item of `kind` in a batch tree (event / stamp) or in a daily anchor tree (batch root). */
@@ -49,6 +50,9 @@ export interface HardStateProof {
     | { kind: "stamp"; digest: string };
   /** issuer.create and the key.add events that establish the signer (events only). */
   authority?: SignedEvent[];
+  /** On the layered log (L1–L3): the record's place in a witnessed checkpoint of its institution's log, and that
+   * checkpoint's leaf in a batch. It replaces `batch`; `ots` and `anchor` are then those of the checkpoint's batch. */
+  checkpoint?: CheckpointInclusion;
   /** Inclusion of the subject in its 10-minute batch. Missing while the event waits for the next batch. */
   batch?: InclusionProof & { id: string; closedAt: string };
   /** The batch root's OpenTimestamps proof: a complete `.ots` file, base64. */
@@ -66,7 +70,7 @@ export type ProofStatus = "queued" | "batched" | "timestamped" | "anchored";
 export function proofStage(p: HardStateProof, otsConfirmed: boolean): ProofStatus {
   if (p.anchor) return "anchored";
   if (p.ots && otsConfirmed) return "timestamped";
-  if (p.batch) return "batched";
+  if (p.batch || p.checkpoint) return "batched";
   return "queued";
 }
 

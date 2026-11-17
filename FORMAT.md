@@ -1,6 +1,6 @@
 # HardState Receipt Format (HRF-1)
 
-**Status:** v1.2 · **Date:** 2026-11-17 · **License:** CC BY-ND 4.0 (this text); the verifier is Apache-2.0
+**Status:** v1.3 · **Date:** 2026-11-17 · **License:** CC BY-ND 4.0 (this text); the verifier is Apache-2.0
 
 A HardState Receipt proves four things about one record, to anyone, without trusting the institution that wrote it or
 HardState: the record is **intact**, it was **signed** by the key it names, it is **included** in a batch, and that batch
@@ -63,7 +63,7 @@ the file and the salt can check that the file is the one recorded.
 
 - Leaf data is a kind byte followed by the item: `0x01 ‖ record_hash`, `0x02 ‖ digest` (a bare SHA-256 stamp),
   `0x03 ‖ batch_root` (in an anchor tree), `0x04 ‖ d` (an institution's index, §9) or `0x05 ‖ lo ‖ hi` (an index gap,
-  §9).
+  §9), `0x06 ‖ record_hash` (an entry of an institution's log, §11) or `0x07 ‖ d` (a witnessed checkpoint, §13).
 - Tree: RFC 9162 Merkle Tree Hash, with `leaf = SHA-256(0x00 ‖ data)` and `node = SHA-256(0x01 ‖ left ‖ right)`.
 - Inclusion: a **sided path**, bottom-up. Each step `{ "s": "L" | "R", "h": "<hex>" }` is a sibling hash and the side
   it sits on (`L`: `node = SHA-256(0x01 ‖ h ‖ running)`; `R`: `node = SHA-256(0x01 ‖ running ‖ h)`). Folding from
@@ -172,7 +172,103 @@ over the hashes of that process's records (same `actor` and `instance`, heartbea
 
 If all four hold, the window is *complete*: the log holds exactly the records the process vouched for.
 
-## 11. Limits
+## 11. Log checkpoints (`hardstate: "checkpoint"`)
+
+An institution's log can also be read as a **Merkle Mountain Range** over its entries in `seq` order:
+
+- Leaf data is `0x06 ‖ record_hash`, so `leaf = SHA-256(0x00 ‖ 0x06 ‖ record_hash)`. Nodes are hashed as in §5.
+- The forest has one perfect tree per set bit of the size `n`, highest first. Positions alone define it, never time.
+- The **root** bags the peaks from the right: `root = node(p₁, node(p₂, … node(pₖ₋₁, pₖ)))`. That is exactly the §5
+  tree root over the same leaves. The root of an empty log is `SHA-256("")`.
+
+A **checkpoint** states the log at one size:
+
+```json
+{ "checkpoint": { "hardstate": "checkpoint", "v": 1, "issuer": "…", "size": 29, "root": "<hex>",
+                  "head": { "seq": 28, "hash": "<hex>" }, "ts": "…", "signer": "<key id>" },
+  "sigs": [{ "key": "<key id>", "sig": { "kind": "ed25519", "signature": "…" } }] }
+```
+
+Each signature is over `SHA-256("hardstate/checkpoint/v1" ‖ canonical(checkpoint))`. The operator signs first, with
+its published key. Independent witnesses add signatures over the same hash.
+
+- **Checkpoint.** `size == head.seq + 1`, and the operator's signature verifies under its published key.
+- **Inclusion.** A record is in the log at a checkpoint when `leaf(record_hash)`, folded up a sided path (§5), yields
+  `root`.
+- **Consistency.** A checkpoint of size `n` extends one of size `m ≤ n` when the proof `{ from: m, to: n, peaks,
+  blocks }` checks:
+  1. `peaks` are the hashes of the size-`m` peaks (highest first), and they bag to the old root.
+  2. `blocks` are the hashes of the perfect subtrees that cover positions `m … n−1`, in order. At each position `p`,
+     take the largest `2^l` with `p mod 2^l = 0` and `p + 2^l ≤ n`.
+  3. Pushing each block onto the old peaks, and merging the last two trees while they have the same height
+     (`node(left, right)`), yields peaks that bag to the new root.
+- **Verdict.** A receipt whose record is included in a checkpoint the operator signed was in the log, unchanged,
+  at that size. A pair of checkpoints with a valid consistency proof shows that nothing before the first one was
+  removed, reordered or rewritten.
+
+## 12. Witnesses
+
+Other institutions witness a log's checkpoints (§11). A witness signs only after checking that the new checkpoint
+extends the last one it signed for that log (a consistency proof). It signs outside every log: no log ever carries
+another log's hash.
+
+- **Witness key:** an Ed25519 `system` key the witnessing institution declares in its own log, scoped to exactly
+  `["witness.cosign"]`. It never signs a log record.
+- **Cosignature:** `{ witness, key, sig, ts }`, where `sig` is the signature over
+  `SHA-256("hardstate/witness/v1" ‖ canonical({ issuer, size, root }))` of the checkpoint.
+- **Choice of witnesses:** for a checkpoint of `issuer`, with Bitcoin block hash `B` (the latest confirmed block the
+  operator knew), each candidate institution `w ≠ issuer` gets the score
+  `SHA-256(SHA-256("hardstate/witness-select/v1" ‖ B ‖ issuer) ‖ w)`. The `k` lowest scores are the witnesses. Anyone
+  can recompute the choice from `B`.
+
+A verifier MUST check, for each cosignature it counts:
+
+1. the key is the witness institution's live witness key;
+2. the witness is not the checkpoint's own institution;
+3. the signature verifies over the witness hash of this checkpoint;
+4. when a choice is given, the witness is one of the `k` the block chose.
+
+The checkpoint is **witnessed** when at least `k` distinct institutions pass.
+
+**Equivocation:** two checkpoints of the same `issuer` and `size` that differ in `root` or `head`, each signed by the
+same key (the operator's over the checkpoint hash, or a witness's over the witness hash), prove that the log was shown
+in two versions. A verifier checks both signatures and that the two checkpoints differ.
+
+## 13. Layered receipts (`checkpoint` section)
+
+On the layered log, a batch holds one leaf per witnessed checkpoint instead of one leaf per record:
+
+- **Checkpoint leaf:** kind `0x07`, with data
+  `SHA-256("hardstate/checkpoint-leaf/v1" ‖ checkpoint_hash ‖ cosig_set_hash)`, where `checkpoint_hash` is the §11
+  hash and `cosig_set_hash = SHA-256("hardstate/cosigs/v1" ‖ canonical(cosigs))` over the cosignatures sorted by
+  `witness`, then `key`. The leaf seals the checkpoint together with the exact cosignatures it had when it was batched.
+
+Such a receipt carries a `checkpoint` section in place of `batch`:
+
+```json
+"checkpoint": {
+  "signed":  { "checkpoint": { … §11 … }, "sigs": [ … ] },
+  "cosigs":  [ { "witness": "…", "key": "…", "sig": { … }, "ts": "…" } ],
+  "witnessKeys": [ { "issuer": "…", "info": { …key object… } } ],
+  "witnesses": { "height": 900000, "blockHash": "…", "selected": ["…", "…"] },
+  "path":  [ { "s": "L", "h": "…" } ],
+  "batch": { "id": "…", "closedAt": "…", "root": "…", "path": [ { "s": "R", "h": "…" } ] }
+}
+```
+
+`ots` and `anchor` are then those of the checkpoint's batch. A verifier replaces step 3 of §8 with:
+
+1. The checkpoint is of the record's institution, and `leaf(record_hash)` (§11, kind `0x06`) folded up `path` yields
+   the checkpoint's `root`.
+2. With the operator's published key, the operator's signature on the checkpoint verifies (§11).
+3. With `witnessKeys`, every cosignature verifies as in §12 (only institutions in `witnesses.selected` count, when
+   given). The receipt names the institutions that witnessed it.
+4. The checkpoint leaf, folded up `batch.path`, yields `batch.root`.
+
+Steps 4–6 of §8 then apply to `batch.root`. The verdict rules are unchanged. A receipt without a `checkpoint` section
+is checked as in §8.
+
+## 14. Limits
 
 A receipt proves that an institution's key signed a record before a Bitcoin block. It does not prove that the content
 is true. Only hashes reach Bitcoin; `public` holds whatever the institution chose to publish.
