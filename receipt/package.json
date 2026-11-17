@@ -1,0 +1,23 @@
+{
+  "name": "@hardstate/receipt",
+  "version": "1.0.0",
+  "description": "HardState Receipt Format (HRF-1) and its verifier: signatures, Merkle inclusion, OpenTimestamps and Bitcoin anchors.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Zevlat-Intelligence/hardstate-standard.git",
+    "directory": "receipt"
+  },
+  "homepage": "https://hardstate.net",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@noble/hashes": "^2.4.0"
+  }
+}
