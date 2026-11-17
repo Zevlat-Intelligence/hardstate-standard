@@ -2,9 +2,9 @@
 // assertions, so the tests exercise the same verification path a browser's authenticator does.
 
 import {
-  addOp, anchorScript, b64, b64url, concat, ed25519KeyId, eventHash, eventHashHex, hex, inclusionPath, leafOf, newTimestamp,
+  addOp, anchorScript, b64, b64url, concat, ed25519KeyId, eventHash, eventHashHex, gapLeaf, gaps, hex, inclusionPath, indexKey, indexLeafData, leafOf, newTimestamp, sidedPath, sidesHex,
   reverse, rootOf, serializeDetached, sha256, signEd25519, utf8,
-  type Bytes, type HardStateProof, type HssEvent, type KeyInfo, type Signature, type SignedEvent, type Timestamp,
+  type AbsenceKind, type AbsenceProof, type Bytes, type HardStateProof, type HssEvent, type KeyInfo, type Signature, type SignedEvent, type Timestamp,
 } from "../src/index.ts";
 
 export interface TestKey { info: KeyInfo; sign(e: HssEvent): Promise<Signature>; signHash(h: Bytes): Promise<Signature> }
@@ -76,7 +76,7 @@ export async function confirmedTimestamp(root: Bytes, height = 900_000): Promise
   return { ts, attested: e.msg };
 }
 
-export async function buildProof() {
+export async function buildProof(opts: { legacy?: boolean } = {}) {
   const demo = await demoLog();
   const subject = demo.log[3];
   const hash = await eventHashHex(subject.event);
@@ -102,10 +102,46 @@ export async function buildProof() {
     hardstate: "proof", hss: 1,
     subject: { kind: "event", signed: subject, hash },
     authority: [demo.log[0], demo.log[1]],
-    batch: { id: "b-1", closedAt: "2026-10-20T10:10:00Z", root: hex.encode(root), size: leaves.length, index: 2, path: (await inclusionPath(leaves, 2)).map(hex.encode) },
+    batch: opts.legacy
+      ? { id: "b-1", closedAt: "2026-10-20T10:10:00Z", root: hex.encode(root), size: leaves.length, index: 2, path: (await inclusionPath(leaves, 2)).map(hex.encode) }
+      : { id: "b-1", closedAt: "2026-10-20T10:10:00Z", root: hex.encode(root), path: sidesHex(await sidedPath(leaves, 2)) },
     ots: b64.encode(serializeDetached(ts)),
-    anchor: { network: "bitcoin", txid, root: hex.encode(dayRoot), size: 2, index: 1, path: (await inclusionPath(dayLeaves, 1)).map(hex.encode) },
+    anchor: opts.legacy
+      ? { network: "bitcoin", txid, root: hex.encode(dayRoot), size: 2, index: 1, path: (await inclusionPath(dayLeaves, 1)).map(hex.encode) }
+      : { network: "bitcoin", txid, root: hex.encode(dayRoot), path: sidesHex(await sidedPath(dayLeaves, 1)) },
     issuedAt: new Date().toISOString(),
   };
   return { proof, fakeFetch, demo };
+}
+
+/** A Proof of Absence over an index of `entries` (kind, id), as of entry `seq` of a log, anchored like buildProof's. */
+export async function buildAbsence(entries: [AbsenceKind, string][], query: [AbsenceKind, string], asOf = { seq: 7, hash: "77".repeat(32) }) {
+  const keys = await Promise.all(entries.map(([k, id]) => indexKey(k, id)));
+  const key = await indexKey(...query);
+  const gs = gaps(keys);
+  const at = gs.findIndex(([lo, hi]) => hex.encode(lo) < hex.encode(key) && hex.encode(key) < hex.encode(hi));
+  const gapLeaves = await Promise.all(gs.map(([lo, hi]) => gapLeaf(lo, hi)));
+  const indexRoot = await rootOf(gapLeaves);
+  const issuer = "demo-city";
+  const leaves = [await leafOf("stamp", new Uint8Array(32).fill(1)), await leafOf("index", await indexLeafData(issuer, asOf.seq, hex.decode(asOf.hash), indexRoot)), await leafOf("stamp", new Uint8Array(32).fill(2))];
+  const root = await rootOf(leaves);
+  const { ts, attested } = await confirmedTimestamp(root);
+  const blocks = { 900000: { id: "00".repeat(31) + "01", merkle_root: hex.encode(reverse(attested)), timestamp: 1_792_000_000 } };
+  const fakeFetch = (async (url: string) => {
+    const u = String(url);
+    let m = u.match(/block-height\/(\d+)$/);
+    if (m) return new Response(blocks[900000].id);
+    m = u.match(/block\/([0-9a-f]{64})$/);
+    if (m) return Response.json({ id: m[1], height: 900000, merkle_root: blocks[900000].merkle_root, timestamp: blocks[900000].timestamp });
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+  const proof: AbsenceProof = {
+    hardstate: "absence", hss: 1, issuer, asOf, query: { kind: query[0], id: query[1] },
+    gap: at < 0 ? { lo: hex.encode(gs[0][0]), hi: hex.encode(gs[0][1]), path: [] } : { lo: hex.encode(gs[at][0]), hi: hex.encode(gs[at][1]), path: sidesHex(await sidedPath(gapLeaves, at)) },
+    index: { root: hex.encode(indexRoot) },
+    batch: { id: "b-9", closedAt: "2026-10-20T10:10:00Z", root: hex.encode(root), path: sidesHex(await sidedPath(leaves, 1)) },
+    ots: b64.encode(serializeDetached(ts)),
+    issuedAt: new Date().toISOString(),
+  };
+  return { proof, fakeFetch, key };
 }

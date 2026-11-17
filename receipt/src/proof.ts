@@ -5,22 +5,41 @@
 import { concat, hex, type Bytes } from "./bytes.ts";
 import type { Network } from "./btc.ts";
 import type { SignedEvent } from "./event.ts";
-import { leafHash } from "./merkle.ts";
+import { leafHash, rootFromPath, rootFromSides } from "./merkle.ts";
 
-export const LEAF_KIND = { event: 0x01, stamp: 0x02, batch: 0x03 } as const;
+export const LEAF_KIND = { event: 0x01, stamp: 0x02, batch: 0x03, index: 0x04, gap: 0x05 } as const;
 export type LeafKind = keyof typeof LEAF_KIND;
 
 /** The leaf hash of a 32-byte item of `kind` in a batch tree (event / stamp) or in a daily anchor tree (batch root). */
 export const leafOf = (kind: LeafKind, item: Bytes) => leafHash(concat(new Uint8Array([LEAF_KIND[kind]]), item));
 
+/** A step of a sided path: the sibling hash (hex) and the side it sits on. */
+export interface SidedStep { s: "L" | "R"; h: string }
+
 export interface InclusionProof {
   /** Root of the tree, hex. */
   root: string;
-  size: number;
-  index: number;
-  /** Sibling hashes bottom-up (RFC 9162), hex. */
-  path: string[];
+  /** Sibling hashes bottom-up with their sides. Proofs issued before sided paths carry plain hex hashes plus `index`
+   * and `size` (RFC 9162 audit paths); verifiers still read those. */
+  path: SidedStep[] | string[];
+  /** Earlier proofs only. */
+  index?: number;
+  /** Earlier proofs only. */
+  size?: number;
 }
+
+/** The root an inclusion proof leads to from `leaf`: a sided path, or an earlier RFC 9162 audit path. */
+export async function proofRoot(leaf: Bytes, p: InclusionProof): Promise<Bytes> {
+  if (p.index !== undefined || p.size !== undefined) {
+    if (p.index === undefined || p.size === undefined || p.path.some((x) => typeof x !== "string")) throw new Error("malformed inclusion proof");
+    return rootFromPath(leaf, p.index, p.size, (p.path as string[]).map(hex.decode));
+  }
+  if (p.path.some((x) => typeof x !== "object" || x === null)) throw new Error("malformed inclusion proof");
+  return rootFromSides(leaf, (p.path as SidedStep[]).map((x) => ({ s: x.s, h: hex.decode(x.h) })));
+}
+
+/** Hex form of a sided path, as proofs carry it. */
+export const sidesHex = (path: { s: "L" | "R"; h: Bytes }[]): SidedStep[] => path.map((x) => ({ s: x.s, h: hex.encode(x.h) }));
 
 export interface HardStateProof {
   hardstate: "proof";

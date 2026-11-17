@@ -5,10 +5,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   anchorScript, canonicalize, commitFile, deserializeDetached, deserializeTimestamp, docCommitment, hex,
-  inclusionPath, leafHash, otsStatus, parseAnchorScript, rootFromPath, rootOf, serializeDetached,
-  serializeTimestamp, sha256, utf8, verifyInclusion, verifyReceipt,
+  inclusionPath, leafHash, otsStatus, parseAnchorScript, rootFromPath, rootFromSides, rootOf, serializeDetached, sidedPath,
+  eventHash, serializeTimestamp, sha256, streamDigest, utf8, verifyAbsence, verifyInclusion, verifyReceipt, verifyStream,
 } from "../src/index.ts";
-import { buildProof, confirmedTimestamp } from "./helpers.ts";
+import { buildAbsence, buildProof, confirmedTimestamp, demoLog, ed25519Key } from "./helpers.ts";
 
 // ── JCS ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -46,6 +46,24 @@ test("Merkle: every inclusion path verifies, wrong index / leaf / size does not"
       }
     }
   }
+});
+
+test("Merkle: sided paths verify for every leaf of every size, with no index or size; a flipped side or sibling fails", async () => {
+  for (let n = 1; n <= 23; n++) {
+    const leaves = await Promise.all(Array.from({ length: n }, (_, i) => leafHash(utf8(`leaf ${i}`))));
+    const root = await rootOf(leaves);
+    for (let i = 0; i < n; i++) {
+      const path = await sidedPath(leaves, i);
+      assert.deepEqual(await rootFromSides(leaves[i], path), root, `n=${n} i=${i}`);
+      assert.equal(path.length, (await inclusionPath(leaves, i)).length);
+      if (path.length) {
+        const flipped = path.map((p, j) => (j === 0 ? { ...p, s: p.s === "L" ? "R" as const : "L" as const } : p));
+        assert.notDeepEqual(await rootFromSides(leaves[i], flipped), root, `flipped n=${n} i=${i}`);
+        if (n > 1) assert.notDeepEqual(await rootFromSides(leaves[(i + 1) % n], path), root, `wrong leaf n=${n} i=${i}`);
+      }
+    }
+  }
+  await assert.rejects(rootFromSides(new Uint8Array(32), [{ s: "X" as "L", h: new Uint8Array(32) }]), /side/);
 });
 
 // ── OpenTimestamps ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -125,8 +143,103 @@ test("verifier: explorers that disagree make it fail; no attestation yet keeps i
   assert.equal((await verifyReceipt(pending, { fetch: fakeFetch })).status, "pending");
 });
 
+test("receipt verifier: proofs issued before sided paths (index + size) still verify", async () => {
+  const { proof, fakeFetch } = await buildProof({ legacy: true });
+  const v = await verifyReceipt(proof, { fetch: fakeFetch });
+  assert.equal(v.status, "valid", JSON.stringify(v.steps, null, 1));
+  assert.match(v.steps.find((s) => s.id === "batch")!.detail, /^Entry 3 of 5 in batch b-1\.$/);
+  const fresh = await verifyReceipt((await buildProof()).proof, { fetch: fakeFetch });
+  assert.equal(fresh.steps.find((s) => s.id === "batch")!.detail, "The record is in batch b-1.");
+});
+
+test("receipt verifier: a sided path with a wrong side is rejected", async () => {
+  const { proof, fakeFetch } = await buildProof();
+  const p = structuredClone(proof);
+  const path = p.batch!.path as { s: "L" | "R"; h: string }[];
+  path[0] = { ...path[0], s: path[0].s === "L" ? "R" : "L" };
+  const v = await verifyReceipt(p, { fetch: fakeFetch });
+  assert.equal(v.status, "invalid");
+  assert.equal(v.steps.find((s) => s.id === "batch")?.state, "fail");
+});
+
 test("rootFromPath rejects malformed paths", async () => {
   const l = await leafHash(utf8("x"));
   await assert.rejects(rootFromPath(l, 0, 1, [l]), /too long/);
   await assert.rejects(rootFromPath(l, 0, 2, []), /too short/);
+});
+
+// ── Proof of Absence ─────────────────────────────────────────────────────────────────────────────────────────────
+
+const ENTRIES: [("review" | "revoke" | "doc"), string][] = [["review", "aa".repeat(32)], ["review", "bb".repeat(32)], ["revoke", "ed25519:0011"], ["doc", "cc".repeat(32)]];
+
+test("absence: a key inside a gap of an anchored index proves nothing of that kind existed as of the entry", async () => {
+  const { proof, fakeFetch } = await buildAbsence(ENTRIES, ["review", "dd".repeat(32)]);
+  const v = await verifyAbsence(proof, { fetch: fakeFetch });
+  assert.equal(v.status, "valid", JSON.stringify(v.steps, null, 1));
+  assert.deepEqual(v.steps.map((s) => s.id), ["absence", "batch", "ots", "anchor"]);
+  assert.equal(v.steps[0].detail, "As of entry #7 of the institution's log, there was no human review of this decision.");
+  assert.equal(v.provenBefore, 1_792_000_000);
+});
+
+test("absence: an empty index proves every key absent", async () => {
+  const { proof, fakeFetch } = await buildAbsence([], ["revoke", "ed25519:ffee"]);
+  assert.equal((await verifyAbsence(proof, { fetch: fakeFetch })).status, "valid");
+});
+
+test("absence attacks: a key that exists, a forged gap or another log entry all fail", async () => {
+  const { proof, fakeFetch } = await buildAbsence(ENTRIES, ["review", "dd".repeat(32)]);
+  // The key exists: no gap strictly contains it (asking about a recorded review with this gap fails).
+  const present = structuredClone(proof); present.query = { kind: "review", id: "aa".repeat(32) };
+  assert.equal((await verifyAbsence(present, { fetch: fakeFetch })).steps[0].state, "fail");
+  // A forged, wider gap is not in the index.
+  const wide = structuredClone(proof); wide.gap.lo = "00".repeat(32); wide.gap.hi = "ff".repeat(32);
+  assert.equal((await verifyAbsence(wide, { fetch: fakeFetch })).status, "invalid");
+  // The same index claimed for a later log entry is not the leaf the batch holds.
+  const later = structuredClone(proof); later.asOf = { ...later.asOf, seq: 8 };
+  assert.equal((await verifyAbsence(later, { fetch: fakeFetch })).steps.find((s) => s.id === "batch")?.state, "fail");
+});
+
+// ── Completeness of an AI system's stream ──────────────────────────────────────────────────────────────────────────
+
+/** Two heartbeats of process "i1" around: its decision, a decision of another process "i2", an official's step and its
+ * failed run. `beat` overrides what the second heartbeat says. */
+async function stream(beat: (said: Record<string, unknown>) => Record<string, unknown> = (x) => x) {
+  const { log, append, official } = await demoLog();
+  const ai = await ed25519Key("system", "Permit pre-review (AI)");
+  const sys = { system: "Pre-review", model: "m", version: "1" };
+  const first = await append(ai, { type: "ai.heartbeat", public: { ...sys, instance: "i1", every: 3600, decisions: 0, runs: 0, failures: 0 }, docs: [] });
+  const d = await append(ai, { type: "ai.decision", case: "BP-1", public: { ...sys, instance: "i1", outcome: "approve", oversight: "required" }, docs: [] });
+  await append(ai, { type: "ai.decision", case: "BP-2", public: { ...sys, instance: "i2", outcome: "deny", oversight: "required" }, docs: [] });
+  await append(official, { type: "case.review", case: "BP-1", public: {}, docs: [] });
+  const r = await append(ai, { type: "ai.run", case: "BP-3", public: { ...sys, instance: "i1", steps: 2, root: "00".repeat(32), outcome: "failed", error: "timeout" }, docs: [] });
+  const digest = hex.encode(await streamDigest([await eventHash(d.event), await eventHash(r.event)]));
+  const second = await append(ai, { type: "ai.heartbeat", public: beat({ ...sys, instance: "i1", every: 3600, decisions: 1, runs: 1, failures: 1, digest, since: first.event.seq }) as never, docs: [] });
+  return { first, second, segment: log.slice(first.event.seq + 1, second.event.seq) };
+}
+
+test("stream: the log between two heartbeats holds exactly the records the process vouched for", async () => {
+  const { first, second, segment } = await stream();
+  const r = await verifyStream(first, second, segment);
+  assert.equal(r.state, "complete", r.detail);
+  assert.deepEqual([r.facts.records, r.facts.decisions, r.facts.runs, r.facts.failures, r.facts.digest], [2, 1, 1, 1, true]);
+});
+
+test("stream: a record the process made but the log does not hold is caught by the count and by the digest", async () => {
+  const counted = await stream((x) => ({ ...x, decisions: 2 }));
+  const a = await verifyStream(counted.first, counted.second, counted.segment);
+  assert.equal(a.state, "missing");
+  assert.match(a.detail, /counts 2 decisions, but the log holds 1/);
+  const forged = await stream((x) => ({ ...x, digest: "00".repeat(32) }));
+  assert.equal((await verifyStream(forged.first, forged.second, forged.segment)).state, "missing");
+});
+
+test("stream: a late heartbeat is a gap; a slice that skips an entry or a beat that points elsewhere does not link", async () => {
+  const late = await stream((x) => ({ ...x, every: 60 }));
+  assert.equal((await verifyStream(late.first, late.second, late.segment)).state, "gap");
+  const { first, second, segment } = await stream();
+  assert.equal((await verifyStream(first, second, segment.filter((_, i) => i !== 1))).state, "unlinked");
+  const swapped = [...segment]; [swapped[0], swapped[1]] = [swapped[1], swapped[0]];
+  assert.equal((await verifyStream(first, second, swapped)).state, "unlinked");
+  const elsewhere = await stream((x) => ({ ...x, since: 2 }));
+  assert.equal((await verifyStream(elsewhere.first, elsewhere.second, elsewhere.segment)).state, "unlinked");
 });

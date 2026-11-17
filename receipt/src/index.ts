@@ -12,3 +12,5 @@ export * from "./cose.ts";
 export * from "./btc.ts";
 export * from "./proof.ts";
 export * from "./verify.ts";
+export * from "./absence.ts";
+export * from "./stream.ts";
