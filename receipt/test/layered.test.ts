@@ -53,7 +53,9 @@ test("layered receipt: record → witnessed checkpoint → batch → Bitcoin ver
   const v = await verifyReceipt(proof, { fetch: fakeFetch, operatorKey: operator.info, witnessK: 2 });
   assert.equal(v.status, "valid", JSON.stringify(v.steps, null, 1));
   const b = v.steps.find((s) => s.id === "batch")!;
-  assert.equal(b.detail, "The record is in checkpoint #3 of the institution's log, witnessed by 2 other institutions (city-a, city-b), which is in batch b-7.");
+  assert.match(b.detail, /^Entry #\d+ is in the institution's log up to entry #3, witnessed by 2 other institutions \(city-a, city-b\); that checkpoint is in batch b-7\.$/);
+  const named = await verifyReceipt(proof, { fetch: fakeFetch, operatorKey: operator.info, witnessK: 2, names: { "city-a": "City A" } });
+  assert.match(named.steps.find((s) => s.id === "batch")!.detail, /\(City A, city-b\)/);
   assert.equal(b.facts?.operatorChecked, true);
   assert.equal(v.provenBefore, 1_792_000_000);
 });

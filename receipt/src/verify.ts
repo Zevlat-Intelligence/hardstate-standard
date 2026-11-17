@@ -49,6 +49,8 @@ export interface VerifyOptions {
   operatorKey?: KeyInfo;
   /** Witnesses a layered receipt's checkpoint needs to count as witnessed (default 1). */
   witnessK?: number;
+  /** Display names for institution ids (witnesses); without one, the id is shown. */
+  names?: Record<string, string>;
 }
 
 /** What the verdict says about who signed. */
@@ -136,9 +138,10 @@ export async function verifyReceipt(proof: HardStateProof, opts: VerifyOptions =
       const r = await verifyCheckpointInclusion(subject, proof.subject.signed.event.issuer, ci, { operatorKey: opts.operatorKey, k: opts.witnessK });
       batchRoot = r.batchRoot;
       const c = ci.signed.checkpoint;
-      const by = r.witnesses.length ? ` witnessed by ${r.witnesses.length} other ${r.witnesses.length === 1 ? "institution" : "institutions"} (${r.witnesses.join(", ")}),` : "";
+      const who = r.witnesses.map((w) => opts.names?.[w] ?? w);
+      const by = who.length ? `, witnessed by ${who.length} other ${who.length === 1 ? "institution" : "institutions"} (${who.join(", ")})` : "";
       add({ id: "batch", state: "pass", title: "Included in batch",
-        detail: `The record is in checkpoint #${c.size - 1} of the institution's log,${by} which is in batch ${ci.batch.id}.`,
+        detail: `Entry #${proof.subject.signed.event.seq} is in the institution's log up to entry #${c.size - 1}${by}; that checkpoint is in batch ${ci.batch.id}.`,
         facts: { batch: ci.batch.id, root: ci.batch.root, checkpoint: c.size, checkpointRoot: c.root, witnesses: r.witnesses.join(","), witnessCount: r.witnesses.length, operatorChecked: r.operatorChecked } });
     } catch (e) {
       add({ id: "batch", state: "fail", title: "Batch inclusion", detail: msg(e) });
